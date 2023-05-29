@@ -19,10 +19,9 @@ from cgcnn.data import collate_pool, get_train_val_test_loader
 from cgcnn.model import CrystalGraphConvNet
 
 parser = argparse.ArgumentParser(description='Crystal Graph Convolutional Neural Networks')
-parser.add_argument('root_dir', metavar='OPTIONS', nargs='+',
+parser.add_argument('data_options', metavar='OPTIONS', nargs='+',
                     help='dataset options, started with the path to root dir, '
                          'then other options')
-parser.add_argument('--random_seed', default=1, type=int, help='random seed for deviding data.')
 parser.add_argument('--task', choices=['regression', 'classification'],
                     default='regression', help='complete a regression or '
                                                    'classification task (default: regression)')
@@ -93,7 +92,7 @@ def main():
     global args, best_mae_error
 
     # load data
-    dataset = CIFData(args)
+    dataset = CIFData(*args.data_options)
     collate_fn = collate_pool
     train_loader, val_loader, test_loader = get_train_val_test_loader(
         dataset=dataset,
@@ -128,14 +127,11 @@ def main():
     structures, _, _ = dataset[0]
     orig_atom_fea_len = structures[0].shape[-1]
     nbr_fea_len = structures[1].shape[-1]
-    out_tensor_shape = np.array((eval(dataset.id_prop_data.iloc[0][1]))).shape[1:]
-
     model = CrystalGraphConvNet(orig_atom_fea_len, nbr_fea_len,
                                 atom_fea_len=args.atom_fea_len,
                                 n_conv=args.n_conv,
                                 h_fea_len=args.h_fea_len,
                                 n_h=args.n_h,
-                                out_tensor_shape=out_tensor_shape,
                                 classification=True if args.task ==
                                                        'classification' else False)
     if args.cuda:
@@ -231,30 +227,29 @@ def train(train_loader, model, criterion, optimizer, epoch, normalizer):
         # measure data loading time
         data_time.update(time.time() - end)
 
-        # if args.cuda:
-        #     input_var = (Variable(input[0].cuda(non_blocking=True)),
-        #                  Variable(input[1].cuda(non_blocking=True)),
-        #                  input[2].cuda(non_blocking=True),
-        #                  [crys_idx.cuda(non_blocking=True) for crys_idx in input[3]])
-        # else:
-        #     input_var = (Variable(input[0]),
-        #                  Variable(input[1]),
-        #                  input[2],
-        #                  input[3])
-
+        if args.cuda:
+            input_var = (Variable(input[0].cuda(non_blocking=True)),
+                         Variable(input[1].cuda(non_blocking=True)),
+                         input[2].cuda(non_blocking=True),
+                         [crys_idx.cuda(non_blocking=True) for crys_idx in input[3]])
+        else:
+            input_var = (Variable(input[0]),
+                         Variable(input[1]),
+                         input[2],
+                         input[3])
         # normalize target
         if args.task == 'regression':
             target_normed = normalizer.norm(target)
         else:
             target_normed = target.view(-1).long()
-        # if args.cuda:
-        #     target_var = Variable(target_normed.cuda(non_blocking=True))
-        # else:
-        #     target_var = Variable(target_normed)
+        if args.cuda:
+            target_var = Variable(target_normed.cuda(non_blocking=True))
+        else:
+            target_var = Variable(target_normed)
 
         # compute output
-        output = model(*input)
-        loss = criterion(output, target_normed)
+        output = model(*input_var)
+        loss = criterion(output, target_var)
 
         # measure accuracy and record loss
         if args.task == 'regression':
@@ -328,32 +323,32 @@ def validate(val_loader, model, criterion, normalizer, test=False):
 
     end = time.time()
     for i, (input, target, batch_cif_ids) in enumerate(val_loader):
-        # if args.cuda:
-        #     with torch.no_grad():
-        #         input_var = (Variable(input[0].cuda(non_blocking=True)),
-        #                      Variable(input[1].cuda(non_blocking=True)),
-        #                      input[2].cuda(non_blocking=True),
-        #                      [crys_idx.cuda(non_blocking=True) for crys_idx in input[3]])
-        # else:
-        #     with torch.no_grad():
-        #         input_var = (Variable(input[0]),
-        #                      Variable(input[1]),
-        #                      input[2],
-        #                      input[3])
+        if args.cuda:
+            with torch.no_grad():
+                input_var = (Variable(input[0].cuda(non_blocking=True)),
+                             Variable(input[1].cuda(non_blocking=True)),
+                             input[2].cuda(non_blocking=True),
+                             [crys_idx.cuda(non_blocking=True) for crys_idx in input[3]])
+        else:
+            with torch.no_grad():
+                input_var = (Variable(input[0]),
+                             Variable(input[1]),
+                             input[2],
+                             input[3])
         if args.task == 'regression':
             target_normed = normalizer.norm(target)
         else:
             target_normed = target.view(-1).long()
-        # if args.cuda:
-        #     with torch.no_grad():
-        #         target_var = Variable(target_normed.cuda(non_blocking=True))
-        # else:
-        #     with torch.no_grad():
-        #         target_var = Variable(target_normed)
+        if args.cuda:
+            with torch.no_grad():
+                target_var = Variable(target_normed.cuda(non_blocking=True))
+        else:
+            with torch.no_grad():
+                target_var = Variable(target_normed)
 
         # compute output
-        output = model(*input)
-        loss = criterion(output, target_normed)
+        output = model(*input_var)
+        loss = criterion(output, target_var)
 
         # measure accuracy and record loss
         if args.task == 'regression':

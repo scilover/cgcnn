@@ -13,8 +13,6 @@ from pymatgen.core.structure import Structure
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataloader import default_collate
 from torch.utils.data.sampler import SubsetRandomSampler
-import pandas as pd
-from sklearn.utils import shuffle
 
 
 def get_train_val_test_loader(dataset, collate_fn=default_collate,
@@ -149,7 +147,7 @@ def collate_pool(dataset_list):
             torch.cat(batch_nbr_fea, dim=0),
             torch.cat(batch_nbr_fea_idx, dim=0),
             crystal_atom_idx),\
-        torch.cat(batch_target, dim=0),\
+        torch.stack(batch_target, dim=0),\
         batch_cif_ids
 
 
@@ -299,18 +297,18 @@ class CIFData(Dataset):
     target: torch.Tensor shape (1, )
     cif_id: str or int
     """
-    def __init__(self, args, max_num_nbr=12, radius=8, dmin=0, step=0.2,
-                 ):
-        self.root_dir = args.root_dir[0]
+    def __init__(self, root_dir, max_num_nbr=12, radius=8, dmin=0, step=0.2,
+                 random_seed=123):
+        self.root_dir = root_dir
         self.max_num_nbr, self.radius = max_num_nbr, radius
-        assert os.path.exists(self.root_dir), 'root_dir does not exist!'
+        assert os.path.exists(root_dir), 'root_dir does not exist!'
         id_prop_file = os.path.join(self.root_dir, 'id_prop.csv')
         assert os.path.exists(id_prop_file), 'id_prop.csv does not exist!'
-        self.id_prop_data = pd.read_csv(id_prop_file)
-        # with open(id_prop_file) as f:
-        #     reader = csv.reader(f)
-        #     self.id_prop_data = [row for row in reader]
-        self.id_prop_data = shuffle(self.id_prop_data, random_state=args.random_seed)
+        with open(id_prop_file) as f:
+            reader = csv.reader(f)
+            self.id_prop_data = [row for row in reader]
+        random.seed(random_seed)
+        random.shuffle(self.id_prop_data)
         atom_init_file = os.path.join(self.root_dir, 'atom_init.json')
         assert os.path.exists(atom_init_file), 'atom_init.json does not exist!'
         self.ari = AtomCustomJSONInitializer(atom_init_file)
@@ -321,7 +319,7 @@ class CIFData(Dataset):
 
     @functools.lru_cache(maxsize=None)  # Cache loaded structures
     def __getitem__(self, idx):
-        cif_id, target = self.id_prop_data.iloc[idx][:2]
+        cif_id, target = self.id_prop_data[idx]
         crystal = Structure.from_file(os.path.join(self.root_dir,
                                                    cif_id+'.cif'))
         atom_fea = np.vstack([self.ari.get_atom_fea(crystal[i].specie.number)
@@ -350,5 +348,5 @@ class CIFData(Dataset):
         atom_fea = torch.Tensor(atom_fea)
         nbr_fea = torch.Tensor(nbr_fea)
         nbr_fea_idx = torch.LongTensor(nbr_fea_idx)
-        target = torch.Tensor(eval(target))
+        target = torch.Tensor([float(target)])
         return (atom_fea, nbr_fea, nbr_fea_idx), target, cif_id
