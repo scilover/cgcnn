@@ -85,12 +85,13 @@ args.cuda = not args.disable_cuda and torch.cuda.is_available()
 
 if args.task == 'regression':
     best_mae_error = 1e10
+    best_mae_percent_error = 1e8
 else:
     best_mae_error = 0.
 
 
 def main():
-    global args, best_mae_error
+    global args, best_mae_error, best_mae_percent_error
 
     # load data
     dataset = CIFData(args)
@@ -163,6 +164,7 @@ def main():
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
             best_mae_error = checkpoint['best_mae_error']
+            best_mae_percent_error = checkpoint['best_mae_percent_error']
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             normalizer.load_state_dict(checkpoint['normalizer'])
@@ -179,7 +181,7 @@ def main():
         train(train_loader, model, criterion, optimizer, epoch, normalizer)
 
         # evaluate on validation set
-        mae_error = validate(val_loader, model, criterion, normalizer)
+        mae_error, mae_percent_error = validate(val_loader, model, criterion, normalizer)
 
         if mae_error != mae_error:
             print('Exit due to NaN')
@@ -191,6 +193,7 @@ def main():
         if args.task == 'regression':
             is_best = mae_error < best_mae_error
             best_mae_error = min(mae_error, best_mae_error)
+            best_mae_percent_error = min(mae_percent_error, best_mae_percent_error)
         else:
             is_best = mae_error > best_mae_error
             best_mae_error = max(mae_error, best_mae_error)
@@ -198,6 +201,7 @@ def main():
             'epoch': epoch + 1,
             'state_dict': model.state_dict(),
             'best_mae_error': best_mae_error,
+            'best_mae_percent_error': best_mae_percent_error,
             'optimizer': optimizer.state_dict(),
             'normalizer': normalizer.state_dict(),
             'args': vars(args)
@@ -216,6 +220,7 @@ def train(train_loader, model, criterion, optimizer, epoch, normalizer):
     losses = AverageMeter()
     if args.task == 'regression':
         mae_errors = AverageMeter()
+        mae_percent_errors = AverageMeter()
     else:
         accuracies = AverageMeter()
         precisions = AverageMeter()
@@ -259,8 +264,10 @@ def train(train_loader, model, criterion, optimizer, epoch, normalizer):
         # measure accuracy and record loss
         if args.task == 'regression':
             mae_error = mae(normalizer.denorm(output.data.cpu()), target)
+            mae_percent_error = mae_percent(normalizer.denorm(output.data.cpu()), target)
             losses.update(loss.data.cpu(), target.size(0))
             mae_errors.update(mae_error, target.size(0))
+            mae_percent_errors.update(mae_percent_error, target.size(0))
         else:
             accuracy, precision, recall, fscore, auc_score = \
                 class_eval(output.data.cpu(), target)
@@ -283,12 +290,12 @@ def train(train_loader, model, criterion, optimizer, epoch, normalizer):
         if i % args.print_freq == 0:
             if args.task == 'regression':
                 print('Epoch: [{0}][{1}/{2}]\t'
-                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                      'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                      'MAE {mae_errors.val:.3f} ({mae_errors.avg:.3f})'.format(
+                      'Time {batch_time.val:.3f} \t'
+                      'Data {data_time.val:.3f} \t'
+                      'Loss {loss.val:.4f} \t'
+                      'MAE percent {mae_percent_errors.val:.3f} '.format(
                     epoch, i, len(train_loader), batch_time=batch_time,
-                    data_time=data_time, loss=losses, mae_errors=mae_errors)
+                    data_time=data_time, loss=losses, mae_percent_errors=mae_percent_errors)
                 )
             else:
                 print('Epoch: [{0}][{1}/{2}]\t'
@@ -312,6 +319,7 @@ def validate(val_loader, model, criterion, normalizer, test=False):
     losses = AverageMeter()
     if args.task == 'regression':
         mae_errors = AverageMeter()
+        mae_percent_errors = AverageMeter()
     else:
         accuracies = AverageMeter()
         precisions = AverageMeter()
@@ -328,28 +336,12 @@ def validate(val_loader, model, criterion, normalizer, test=False):
 
     end = time.time()
     for i, (input, target, batch_cif_ids) in enumerate(val_loader):
-        # if args.cuda:
-        #     with torch.no_grad():
-        #         input_var = (Variable(input[0].cuda(non_blocking=True)),
-        #                      Variable(input[1].cuda(non_blocking=True)),
-        #                      input[2].cuda(non_blocking=True),
-        #                      [crys_idx.cuda(non_blocking=True) for crys_idx in input[3]])
-        # else:
-        #     with torch.no_grad():
-        #         input_var = (Variable(input[0]),
-        #                      Variable(input[1]),
-        #                      input[2],
-        #                      input[3])
+
         if args.task == 'regression':
             target_normed = normalizer.norm(target)
         else:
             target_normed = target.view(-1).long()
-        # if args.cuda:
-        #     with torch.no_grad():
-        #         target_var = Variable(target_normed.cuda(non_blocking=True))
-        # else:
-        #     with torch.no_grad():
-        #         target_var = Variable(target_normed)
+
 
         # compute output
         output = model(*input)
@@ -358,8 +350,10 @@ def validate(val_loader, model, criterion, normalizer, test=False):
         # measure accuracy and record loss
         if args.task == 'regression':
             mae_error = mae(normalizer.denorm(output.data.cpu()), target)
+            mae_percent_error = mae_percent(normalizer.denorm(output.data.cpu()), target)
             losses.update(loss.data.cpu().item(), target.size(0))
             mae_errors.update(mae_error, target.size(0))
+            mae_percent_errors.update(mae_percent_error, target.size(0))
             if test:
                 test_pred = normalizer.denorm(output.data.cpu())
                 test_target = target
@@ -390,11 +384,11 @@ def validate(val_loader, model, criterion, normalizer, test=False):
         if i % args.print_freq == 0:
             if args.task == 'regression':
                 print('Test: [{0}/{1}]\t'
-                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                      'MAE {mae_errors.val:.3f} ({mae_errors.avg:.3f})'.format(
+                      'Time {batch_time.val:.3f} \t'
+                      'Loss {loss.val:.4f} \t'
+                      'MAE percent {mae_percent_errors.val:.3f} '.format(
                     i, len(val_loader), batch_time=batch_time, loss=losses,
-                    mae_errors=mae_errors))
+                    mae_percent_errors=mae_percent_errors))
             else:
                 print('Test: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -419,9 +413,9 @@ def validate(val_loader, model, criterion, normalizer, test=False):
     else:
         star_label = '*'
     if args.task == 'regression':
-        print(' {star} MAE {mae_errors.avg:.3f}'.format(star=star_label,
-                                                        mae_errors=mae_errors))
-        return mae_errors.avg
+        print(' {star} MAE percent {mae_percent_errors.avg:.3f}'.format(star=star_label,
+                                                        mae_percent_errors=mae_percent_errors))
+        return mae_errors.avg, mae_percent_errors.avg
     else:
         print(' {star} AUC {auc.avg:.3f}'.format(star=star_label,
                                                  auc=auc_scores))
@@ -462,6 +456,10 @@ def mae(prediction, target):
     target: torch.Tensor (N, 1)
     """
     return torch.mean(torch.abs(target - prediction))
+
+def mae_percent(prediction, target):
+
+    return torch.mean(torch.abs(target - prediction)/torch.abs(target))
 
 
 def class_eval(prediction, target):
